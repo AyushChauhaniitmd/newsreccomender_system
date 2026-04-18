@@ -11,10 +11,15 @@ SETUP AND RUN
 3) npm install
 4) npm run dev
 5) Open http://localhost:5173 (or the URL shown in terminal)
+6) Open HyperNews at http://localhost:5173/hypernews
 
 PRODUCTION
 - npm run build
 - npm run preview
+
+OPTIONAL ENV FOR BACKEND URL
+- Create .env.local and add:
+- VITE_HYPERNEWS_BACKEND_URL=http://127.0.0.1:8000
 
 IF POWERSHELL BLOCKS NPM
 - Use: npm.cmd install

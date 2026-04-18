@@ -11,6 +11,7 @@ export function Navbar() {
 
   const links = [
     { path: '/', label: 'Home' },
+    { path: '/hypernews', label: 'HyperNews' },
     { path: '/explore', label: 'Explore' },
     { path: '/about', label: 'About' },
     { path: '/contact', label: 'Contact' },
