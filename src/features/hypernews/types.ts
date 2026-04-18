@@ -1,36 +1,57 @@
+export type MoodKey = "neutral" | "curious" | "happy" | "stressed" | "tired";
+export type MoodInputMode = "manual" | "camera";
+export type FeedbackAction = "click" | "read_full" | "skip" | "save";
+
 export interface Article {
   news_id: string;
   title: string;
   abstract: string;
   category: string;
+  subcategory?: string;
+  url?: string;
   source?: string;
   score?: number;
-  candidate_source?: string;
-  reasons?: string[];
-  matched_entities?: string[];
 }
 
 export interface RecommendResponse {
   articles: Article[];
   explanation: string;
   mode: string;
-  request_id?: string;
 }
 
-export interface SuggestResponse {
-  suggestions: string[];
+export interface LocationContext {
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  country_code: string | null;
+  timezone: string | null;
+  source: "gps" | "ip" | "manual" | null;
+  language_hint: string | null;
 }
 
-export interface SearchEntry {
-  query_text: string;
-  normalized_query: string;
-  created_at: string;
+export type LocationStatus =
+  | "off"
+  | "requesting"
+  | "gps"
+  | "ip"
+  | "manual"
+  | "denied"
+  | "unavailable"
+  | "timeout"
+  | "error";
+
+export interface LocationResponse {
+  status: string;
+  location: LocationContext | null;
+  detail?: string;
 }
 
-export interface FeedbackEntry {
-  article_id: string;
-  action: string;
-  created_at: string;
+export interface DetectMoodResponse {
+  mood: MoodKey | null;
+  raw_emotion: string | null;
+  confidence: number;
+  status: string;
+  latency_ms: number;
 }
 
 export interface Profile {
@@ -40,11 +61,8 @@ export interface Profile {
   interests: Record<string, number>;
   articles_read: number;
   recent_clicks: string[];
-  recent_negative_actions: string[];
+  recent_skips: string[];
   session_topics: string[];
-  recent_queries: string[];
-  recent_entities: string[];
-  recent_sources: string[];
-  recent_searches: SearchEntry[];
-  recent_feedback: FeedbackEntry[];
+  total_positive_interactions: number;
+  location?: LocationContext | null;
 }

@@ -1,378 +1,446 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { apiGet, apiPost } from "../api";
+import { ApiError, apiGet, apiPost } from "../api";
 import { useHyperNewsAuth } from "../auth";
+import { useHyperNewsSearch } from "../SearchContext";
 import { HyperNewsContextBar } from "../components/ContextBar";
 import { HyperNewsExplanationBanner } from "../components/ExplanationBanner";
 import { HyperNewsKnowledgeGraphPanel } from "../components/KnowledgeGraphPanel";
 import { HyperNewsCard } from "../components/NewsCard";
-import type { Article, RecommendResponse, SuggestResponse } from "../types";
-
-interface FetchOptions {
-  append?: boolean;
-  excludeIds?: string[];
-  batchSize?: number;
-  queryOverride?: string;
-  retryOnFailure?: boolean;
-}
-
-const MOODS = [
-  { key: "neutral", emoji: "Calm", label: "Neutral" },
-  { key: "curious", emoji: "Explore", label: "Curious" },
-  { key: "happy", emoji: "Bright", label: "Happy" },
-  { key: "stressed", emoji: "Light", label: "Stressed" },
-  { key: "tired", emoji: "Easy", label: "Tired" },
-];
+import { createSessionUserId, ensureSessionUserId, readSessionUserId, writeSessionUserId } from "../session";
+import type {
+  Article,
+  FeedbackAction,
+  LocationContext,
+  LocationResponse,
+  LocationStatus,
+  MoodInputMode,
+  MoodKey,
+  Profile,
+  RecommendResponse,
+} from "../types";
 
 const PAGE_SIZE = 8;
-const GUEST_USER_STORAGE_KEY = "hypernews_guest_user_id";
+
+const MOODS: Array<{ key: MoodKey; emoji: string; label: string }> = [
+  { key: "neutral", emoji: "😐", label: "Neutral" },
+  { key: "curious", emoji: "🤔", label: "Curious" },
+  { key: "happy", emoji: "😊", label: "Happy" },
+  { key: "stressed", emoji: "😰", label: "Stressed" },
+  { key: "tired", emoji: "😴", label: "Tired" },
+];
 
 function normalizeArticleId(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function createGuestUserId(): string {
-  return `guest_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function articleIdsFromList(items: Article[]): string[] {
-  return items
-    .map((article) => normalizeArticleId(article.news_id))
-    .filter(Boolean);
-}
-
-function dedupeArticles(items: Article[], seenIds: Set<string> = new Set()): Article[] {
-  const unique: Article[] = [];
-  for (const article of items) {
-    const newsId = normalizeArticleId(article.news_id);
-    if (!newsId || seenIds.has(newsId)) {
-      continue;
-    }
-    seenIds.add(newsId);
-    unique.push(article);
+function browserTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
   }
-  return unique;
+}
+
+function locationStatusFromContext(location: LocationContext | null): LocationStatus {
+  if (!location?.source) return "off";
+  if (location.source === "gps") return "gps";
+  if (location.source === "ip") return "ip";
+  return "manual";
 }
 
 export function HyperNewsHomePage() {
   const navigate = useNavigate();
   const { user, isAuthenticated, logout } = useHyperNewsAuth();
-  const [guestUserId, setGuestUserId] = useState("");
-  const [mood, setMood] = useState("neutral");
-  const [queryInput, setQueryInput] = useState("");
+  const { query, setQuery, setSuggestions, setOnSearch, setLoading: setSearchLoading } = useHyperNewsSearch();
+
+  const [userId, setUserIdState] = useState("");
+  const [mood, setMood] = useState<MoodKey>("neutral");
+  const [moodInputMode, setMoodInputMode] = useState<MoodInputMode>("manual");
+  const [detectedMood, setDetectedMood] = useState<MoodKey | null>(null);
+  const [confidence, setConfidence] = useState<number | null>(null);
+  const [lastStableMood, setLastStableMood] = useState<MoodKey | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
   const [articles, setArticles] = useState<Article[]>([]);
   const [explanation, setExplanation] = useState("");
   const [mode, setMode] = useState("");
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [hasLoadedFeed, setHasLoadedFeed] = useState(false);
   const [feedbackMap, setFeedbackMap] = useState<Record<string, string>>({});
   const [toastMsg, setToastMsg] = useState("");
-  const [exploreFocus, setExploreFocus] = useState(55);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [lastRequestId, setLastRequestId] = useState("");
-  const retryTimerRef = useRef<number | null>(null);
-  const requestIdRef = useRef(0);
-  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
-  const articlesRef = useRef<Article[]>([]);
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>("off");
+  const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [hasLoadedFeed, setHasLoadedFeed] = useState(false);
+  const previousAuthUserIdRef = useRef<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
-  const userId = isAuthenticated ? String(user?.id || "") : guestUserId;
-  const userLabel = isAuthenticated ? user?.name || user?.email || userId : "Guest session";
+  const authUserId = isAuthenticated ? String(user?.id || "") : "";
+  const authLabel = isAuthenticated ? user?.name || user?.email || authUserId : "Guest session";
 
-  const clearRetryTimer = useCallback(() => {
-    if (retryTimerRef.current !== null) {
-      window.clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = null;
+  const clearToastTimer = useCallback(() => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
     }
   }, []);
 
-  const showToast = useCallback((msg: string) => {
-    setToastMsg(msg);
-    window.setTimeout(() => setToastMsg(""), 2500);
+  const showToast = useCallback(
+    (message: string) => {
+      clearToastTimer();
+      setToastMsg(message);
+      toastTimerRef.current = window.setTimeout(() => {
+        setToastMsg("");
+      }, 2500);
+    },
+    [clearToastTimer],
+  );
+
+  useEffect(() => {
+    return () => clearToastTimer();
+  }, [clearToastTimer]);
+
+  useEffect(() => {
+    if (authUserId) {
+      writeSessionUserId(authUserId);
+      setUserIdState(authUserId);
+      previousAuthUserIdRef.current = authUserId;
+      return;
+    }
+
+    const storedUserId = readSessionUserId();
+    if (storedUserId && storedUserId !== previousAuthUserIdRef.current) {
+      setUserIdState(storedUserId);
+      previousAuthUserIdRef.current = null;
+      return;
+    }
+
+    const nextGuestUserId = previousAuthUserIdRef.current ? createSessionUserId() : ensureSessionUserId();
+    writeSessionUserId(nextGuestUserId);
+    setUserIdState(nextGuestUserId);
+    previousAuthUserIdRef.current = null;
+  }, [authUserId]);
+
+  const setUserId = useCallback((nextUserId: string) => {
+    const trimmedUserId = nextUserId.trim();
+    if (!trimmedUserId) {
+      return;
+    }
+
+    writeSessionUserId(trimmedUserId);
+    setFeedbackMap({});
+    setLocationContext(null);
+    setLocationStatus("off");
+    setUserIdState(trimmedUserId);
+    setArticles([]);
+    setExplanation("");
+    setMode("");
+    setHasLoadedFeed(false);
   }, []);
-
-  useEffect(() => {
-    articlesRef.current = articles;
-  }, [articles]);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      return;
-    }
-    const existingGuestUserId = window.localStorage.getItem(GUEST_USER_STORAGE_KEY);
-    if (existingGuestUserId) {
-      setGuestUserId(existingGuestUserId);
-      return;
-    }
-    const nextGuestUserId = createGuestUserId();
-    window.localStorage.setItem(GUEST_USER_STORAGE_KEY, nextGuestUserId);
-    setGuestUserId(nextGuestUserId);
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    return () => clearRetryTimer();
-  }, [clearRetryTimer]);
-
-  useEffect(() => {
-    if (!userId || queryInput.trim().length < 2) {
-      setSuggestions([]);
-      return;
-    }
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(async () => {
-      try {
-        const path = `/search/suggest?q=${encodeURIComponent(queryInput)}&user_id=${encodeURIComponent(userId)}&limit=8`;
-        const data = await apiGet<SuggestResponse>(path);
-        if (!controller.signal.aborted) {
-          setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
-        }
-      } catch {
-        // no-op
-      }
-    }, 120);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(timeout);
-    };
-  }, [queryInput, userId]);
 
   const fetchRecommendations = useCallback(
-    async ({ append = false, excludeIds = [], batchSize = PAGE_SIZE, queryOverride, retryOnFailure = false }: FetchOptions = {}) => {
+    async (queryOverride?: string) => {
       if (!userId) {
-        return false;
+        return;
       }
 
-      const queryValue = (queryOverride ?? activeQuery).trim();
-      const normalizedExcludeIds = excludeIds.map((value) => normalizeArticleId(value)).filter(Boolean);
-      const requestId = append ? requestIdRef.current : ++requestIdRef.current;
-      const requestToken = `req_${Date.now()}_${requestId}`;
-
-      if (append) {
-        setLoadingMore(true);
-      } else {
-        clearRetryTimer();
-        setLoading(true);
-      }
+      const nextQuery = (queryOverride ?? activeQuery).trim();
+      setLoading(true);
+      setSearchLoading(true);
 
       try {
         const data = await apiPost<RecommendResponse>("/recommend", {
           user_id: userId,
-          session_id: userId,
-          request_id: requestToken,
           mood,
-          query: queryValue || null,
-          n: batchSize,
-          exclude_ids: normalizedExcludeIds,
-          surface: queryValue ? "search" : "feed",
-          explore_focus: exploreFocus,
+          query: nextQuery || null,
+          n: PAGE_SIZE,
         });
 
-        if (requestId !== requestIdRef.current) {
-          return false;
-        }
-
         const nextArticles = Array.isArray(data.articles) ? data.articles : [];
-        const uniqueArticles = append
-          ? dedupeArticles(nextArticles, new Set(articleIdsFromList(articlesRef.current)))
-          : dedupeArticles(nextArticles);
-
-        setLastRequestId(String(data.request_id || requestToken));
-
-        if (append) {
-          setArticles((prev) => [...prev, ...uniqueArticles]);
-          if (data.mode) {
-            setMode(data.mode);
-          }
-          setHasMore(uniqueArticles.length > 0 && nextArticles.length >= batchSize);
-        } else {
-          if (normalizedExcludeIds.length > 0 && uniqueArticles.length === 0 && articlesRef.current.length > 0) {
-            setHasMore(false);
-            showToast("No fresh unseen stories are available right now.");
-            setHasLoadedFeed(true);
-            return false;
-          }
-
-          setArticles(uniqueArticles);
-          setExplanation(data.explanation || "");
-          setMode(data.mode || "");
-          setToastMsg("");
-          setFeedbackMap((prev) => {
-            const next: Record<string, string> = {};
-            for (const article of uniqueArticles) {
-              const key = normalizeArticleId(article.news_id);
-              const existing = prev[key];
-              if (existing) {
-                next[key] = existing;
-              }
+        setArticles(nextArticles);
+        setExplanation(data.explanation || "");
+        setMode(data.mode || "");
+        setFeedbackMap((previous) => {
+          const next: Record<string, string> = {};
+          for (const article of nextArticles) {
+            const key = normalizeArticleId(article.news_id);
+            if (previous[key]) {
+              next[key] = previous[key];
             }
-            return next;
-          });
-          setHasMore(uniqueArticles.length > 0 && nextArticles.length >= batchSize);
-        }
-
-        setHasLoadedFeed(true);
-        return uniqueArticles.length > 0;
-      } catch {
-        if (requestId !== requestIdRef.current) {
-          return false;
-        }
-
-        if (append) {
-          showToast("Could not load more articles right now.");
-        } else {
-          setToastMsg("Cannot reach backend. Retrying...");
-          if (retryOnFailure) {
-            retryTimerRef.current = window.setTimeout(() => {
-              void fetchRecommendations({ batchSize, queryOverride: queryValue, retryOnFailure: true });
-            }, 2000);
           }
-        }
-
-        setHasLoadedFeed(true);
-        return false;
+          return next;
+        });
+      } catch {
+        showToast("Cannot reach backend. Is FastAPI running?");
       } finally {
-        if (append) {
-          setLoadingMore(false);
-        } else if (requestId === requestIdRef.current) {
-          setLoading(false);
-        }
+        setLoading(false);
+        setSearchLoading(false);
+        setHasLoadedFeed(true);
       }
     },
-    [activeQuery, clearRetryTimer, exploreFocus, mood, showToast, userId],
+    [activeQuery, mood, setSearchLoading, showToast, userId],
   );
 
-  useEffect(() => {
+  const syncLocationFromProfile = useCallback(async () => {
     if (!userId) {
       return;
     }
-    void fetchRecommendations({ retryOnFailure: true });
-  }, [fetchRecommendations, userId]);
+
+    try {
+      const profile = await apiGet<Profile>(`/profile/${encodeURIComponent(userId)}`);
+      const nextLocation = profile.location || null;
+      setLocationContext(nextLocation);
+      setLocationStatus(locationStatusFromContext(nextLocation));
+    } catch {
+      // Silent fail to keep the feed usable without location.
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    setSuggestions([]);
+  }, [query, setSuggestions]);
 
   const submitSearch = useCallback(() => {
-    const nextQuery = queryInput.trim();
-    setHasMore(true);
+    const nextQuery = query.trim();
     if (nextQuery === activeQuery) {
-      void fetchRecommendations({ queryOverride: nextQuery, retryOnFailure: true });
+      void fetchRecommendations(nextQuery);
       return;
     }
+
     setActiveQuery(nextQuery);
-  }, [activeQuery, fetchRecommendations, queryInput]);
+  }, [activeQuery, fetchRecommendations, query]);
+
+  useEffect(() => {
+    setOnSearch(submitSearch);
+    return () => setOnSearch(() => {});
+  }, [setOnSearch, submitSearch]);
 
   useEffect(() => {
     if (!userId) {
       return;
     }
-    if (!hasLoadedFeed && !activeQuery) {
-      return;
-    }
-    void fetchRecommendations({ queryOverride: activeQuery, retryOnFailure: true });
-  }, [activeQuery, fetchRecommendations, hasLoadedFeed, userId]);
 
-  const refreshFeed = useCallback(() => {
-    setHasMore(true);
-    void fetchRecommendations({ excludeIds: articleIdsFromList(articlesRef.current), retryOnFailure: true });
-  }, [fetchRecommendations]);
-
-  const loadMoreArticles = useCallback(() => {
-    if (!userId || loading || loadingMore || !hasMore || articlesRef.current.length === 0) {
-      return;
-    }
-    void fetchRecommendations({ append: true, excludeIds: articleIdsFromList(articlesRef.current), batchSize: PAGE_SIZE });
-  }, [fetchRecommendations, hasMore, loading, loadingMore, userId]);
+    void fetchRecommendations(activeQuery);
+  }, [activeQuery, fetchRecommendations, mood, userId]);
 
   useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
-    if (!sentinel || !hasMore || loading || loadingMore || articles.length === 0) {
+    if (!userId) {
       return;
     }
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          loadMoreArticles();
+    void syncLocationFromProfile();
+  }, [syncLocationFromProfile, userId]);
+
+  const applyLocationPayload = useCallback(
+    async (payload: LocationResponse, successMessage: string) => {
+      if (!payload.location) {
+        setLocationStatus("error");
+        showToast(payload.detail || "Location lookup failed.");
+        return false;
+      }
+
+      setLocationContext(payload.location);
+      setLocationStatus(locationStatusFromContext(payload.location));
+      showToast(successMessage);
+      await fetchRecommendations(activeQuery);
+      return true;
+    },
+    [activeQuery, fetchRecommendations, showToast],
+  );
+
+  const enableLocation = useCallback(() => {
+    if (!userId) {
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      setLocationStatus("unavailable");
+      showToast("This browser cannot provide device location.");
+      return;
+    }
+
+    setLocationStatus("requesting");
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const payload = await apiPost<LocationResponse>("/context/location", {
+            user_id: userId,
+            lat: position.coords.latitude,
+            lon: position.coords.longitude,
+            timezone: browserTimezone(),
+          });
+          await applyLocationPayload(payload, "Precise location enabled");
+        } catch (error) {
+          setLocationStatus("error");
+          showToast(error instanceof ApiError ? error.detail : "Failed to resolve device location.");
         }
       },
-      { rootMargin: "500px 0px" },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          setLocationStatus("denied");
+          showToast("Location permission denied");
+          return;
+        }
+
+        if (error.code === error.TIMEOUT) {
+          setLocationStatus("timeout");
+          showToast("Location request timed out");
+          return;
+        }
+
+        setLocationStatus("unavailable");
+        showToast("Device location is unavailable");
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 8000,
+        maximumAge: 5 * 60 * 1000,
+      },
     );
+  }, [applyLocationPayload, showToast, userId]);
 
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [articles.length, hasMore, loadMoreArticles, loading, loadingMore]);
-
-  const sendFeedback = async (article: Article, position: number, action: string) => {
-    const normalizedArticleId = normalizeArticleId(article.news_id);
-    if (!normalizedArticleId || !userId) {
+  const useApproximateLocation = useCallback(async () => {
+    if (!userId) {
       return;
     }
 
-    setFeedbackMap((prev) => ({ ...prev, [normalizedArticleId]: action }));
-    if (action === "skip" || action === "not_interested" || action === "less_from_source") {
-      setArticles((prev) => prev.filter((entry) => normalizeArticleId(entry.news_id) !== normalizedArticleId));
+    setLocationStatus("requesting");
+
+    try {
+      const payload = await apiPost<LocationResponse>("/context/location/ip", {
+        user_id: userId,
+        timezone: browserTimezone(),
+      });
+      await applyLocationPayload(payload, "Approximate location enabled");
+    } catch (error) {
+      setLocationStatus("error");
+      showToast(error instanceof ApiError ? error.detail : "Failed to resolve approximate location.");
+    }
+  }, [applyLocationPayload, showToast, userId]);
+
+  const clearLocation = useCallback(async () => {
+    if (!userId) {
+      return;
     }
 
-    const actionToastMap: Record<string, string> = {
-      read_full: "Preference saved for upcoming stories",
-      save: "Saved for future recommendations",
-      more_like_this: "We will lean further into this topic",
-      skip: "Skipped. Upcoming stories will adjust",
-      not_interested: "We will downrank similar stories",
-      less_from_source: `We will reduce stories from ${article.source || "this source"}`,
+    try {
+      await apiPost("/context/location/clear", { user_id: userId });
+    } catch {
+      // Silent fail; clearing local state is still useful for the session.
+    }
+
+    setLocationContext(null);
+    setLocationStatus("off");
+    showToast("Location cleared");
+    await fetchRecommendations(activeQuery);
+  }, [activeQuery, fetchRecommendations, showToast, userId]);
+
+  const saveManualLocation = useCallback(
+    async (input: { city: string; region: string; country: string }) => {
+      if (!userId) {
+        return;
+      }
+
+      setLocationStatus("requesting");
+
+      try {
+        const payload = await apiPost<LocationResponse>("/context/location/manual", {
+          user_id: userId,
+          city: input.city,
+          region: input.region || null,
+          country: input.country,
+          timezone: browserTimezone(),
+        });
+        await applyLocationPayload(payload, "Manual location saved");
+      } catch (error) {
+        setLocationStatus("error");
+        showToast(error instanceof ApiError ? error.detail : "Failed to save manual location.");
+      }
+    },
+    [applyLocationPayload, showToast, userId],
+  );
+
+  const sendFeedback = async (article: Article, action: FeedbackAction) => {
+    const articleId = normalizeArticleId(article.news_id);
+    if (!articleId || !userId) {
+      return;
+    }
+
+    setFeedbackMap((previous) => ({ ...previous, [articleId]: action }));
+    if (action === "skip") {
+      setArticles((previous) => previous.filter((entry) => normalizeArticleId(entry.news_id) !== articleId));
+    }
+
+    const actionToastMap: Record<FeedbackAction, string> = {
+      click: "Preference saved",
+      read_full: "Preference saved",
+      save: "Saved for later recommendations",
+      skip: "Skipped. We will adjust upcoming stories",
     };
-    showToast(actionToastMap[action] || "Feedback saved");
+    showToast(actionToastMap[action]);
 
     try {
       await apiPost("/feedback", {
         user_id: userId,
-        session_id: userId,
-        request_id: lastRequestId,
-        impression_id: normalizedArticleId,
-        article_id: normalizedArticleId,
+        article_id: articleId,
         action,
-        position,
-        query_text: activeQuery,
-        source_feedback: article.source || "",
       });
+      await fetchRecommendations(activeQuery);
     } catch {
       showToast("Could not save feedback right now.");
     }
   };
 
-  const resetProfile = async () => {
-    clearRetryTimer();
-    requestIdRef.current += 1;
+  const refreshFeed = useCallback(() => {
+    void fetchRecommendations(activeQuery);
+  }, [activeQuery, fetchRecommendations]);
 
-    try {
-      await apiPost(`/reset/${encodeURIComponent(userId)}`, {});
-    } catch {
-      // silent fail
+  const resetProfile = useCallback(async () => {
+    if (!userId) {
+      return;
     }
 
-    articlesRef.current = [];
+    try {
+      await apiPost(`/reset/${encodeURIComponent(userId)}`);
+    } catch {
+      // Silent fail; the local reset still keeps the UI consistent.
+    }
+
     setArticles([]);
     setExplanation("");
     setMode("");
     setFeedbackMap({});
+    setLocationContext(null);
+    setLocationStatus("off");
     setHasLoadedFeed(false);
-    setHasMore(true);
-    setQueryInput("");
-    setActiveQuery("");
-    setSuggestions([]);
-    setLastRequestId("");
     showToast("Profile memory reset");
+    await fetchRecommendations(activeQuery);
+  }, [activeQuery, fetchRecommendations, showToast, userId]);
 
+  const startFreshSession = useCallback(async () => {
     if (userId) {
-      void fetchRecommendations({ retryOnFailure: true });
+      try {
+        await apiPost(`/reset/${encodeURIComponent(userId)}`);
+      } catch {
+        // Silent fail; the new session id is still the important part.
+      }
     }
-  };
+
+    const nextUserId = createSessionUserId();
+    writeSessionUserId(nextUserId);
+    setUserIdState(nextUserId);
+    setArticles([]);
+    setExplanation("");
+    setMode("");
+    setFeedbackMap({});
+    setLocationContext(null);
+    setLocationStatus("off");
+    setHasLoadedFeed(false);
+    showToast("Fresh session started");
+  }, [showToast, userId]);
 
   const showWelcome = !loading && articles.length === 0 && !hasLoadedFeed;
-  const showEmptyState = !loading && articles.length === 0 && hasLoadedFeed;
+  const showEmptyState = !loading && articles.length === 0 && hasLoadedFeed && !explanation;
 
-  if (!isAuthenticated && !guestUserId) {
+  if (!userId) {
     return (
       <div className="hn-loader-wrap">
         <div className="hn-glass-card" style={{ padding: 28 }}>Loading HyperNews...</div>
@@ -384,27 +452,40 @@ export function HyperNewsHomePage() {
     <div className="hn-page-root">
       <HyperNewsContextBar
         isAuthenticated={isAuthenticated}
-        userLabel={userLabel}
+        authLabel={authLabel}
+        currentUserId={userId}
+        setUserId={setUserId}
         mood={mood}
         setMood={setMood}
+        moodInputMode={moodInputMode}
+        setMoodInputMode={setMoodInputMode}
+        detectedMood={detectedMood}
+        setDetectedMood={setDetectedMood}
+        confidence={confidence}
+        setConfidence={setConfidence}
+        lastStableMood={lastStableMood}
+        setLastStableMood={setLastStableMood}
         moods={MOODS}
-        query={queryInput}
-        setQuery={setQueryInput}
-        suggestions={suggestions}
+        query={query}
+        setQuery={setQuery}
         onSearch={submitSearch}
+        locationStatus={locationStatus}
+        locationContext={locationContext}
+        onEnableLocation={enableLocation}
+        onUseApproximateLocation={useApproximateLocation}
+        onClearLocation={clearLocation}
+        onSaveManualLocation={saveManualLocation}
         onRefresh={refreshFeed}
         onResetProfile={resetProfile}
+        onNewSession={startFreshSession}
         onSignOut={logout}
         onSignIn={() => navigate("/hypernews/login")}
         onRegister={() => navigate("/hypernews/register")}
         loading={loading}
         mode={mode}
-        exploreFocus={exploreFocus}
-        setExploreFocus={setExploreFocus}
       />
 
       <main className="hn-main-wrap">
-
         {explanation && <HyperNewsExplanationBanner text={explanation} mode={mode} />}
         <HyperNewsKnowledgeGraphPanel />
 
@@ -426,22 +507,17 @@ export function HyperNewsHomePage() {
                   <HyperNewsCard
                     article={article}
                     feedbackState={feedbackMap[normalizeArticleId(article.news_id)] || null}
-                    onFeedback={(action) => void sendFeedback(article, index, action)}
+                    onFeedback={(action) => void sendFeedback(article, action)}
                   />
                 </div>
               ))}
             </div>
 
-            <div className="hn-more-wrap">
-              {loadingMore && <div className="hn-inline-note">Loading more stories...</div>}
-
-              {!loadingMore && hasMore && (
-                <button onClick={loadMoreArticles} className="hn-secondary-btn">Load More News</button>
-              )}
-
-              {!hasMore && <div className="hn-inline-note">No more fresh stories are available in this batch yet.</div>}
-              <div ref={loadMoreSentinelRef} style={{ width: "100%", height: 1 }} />
-            </div>
+            {activeQuery && (
+              <div className="hn-inline-note" style={{ marginTop: 18 }}>
+                Showing results for <strong>{activeQuery}</strong>
+              </div>
+            )}
           </>
         )}
 
@@ -449,14 +525,14 @@ export function HyperNewsHomePage() {
           <div className="hn-center-state">
             <div className="hn-state-icon">Feed</div>
             <h2>Welcome to HyperNews</h2>
-            <p>Your hybrid retrieval and personalized ranking feed is ready.</p>
+            <p>Your personalized, mood-aware news feed is ready.</p>
           </div>
         )}
 
         {showEmptyState && (
           <div className="hn-center-state">
             <h2>No stories matched this batch</h2>
-            <p>Try a different search, refresh for a fresh set, or reset your profile memory.</p>
+            <p>Try a different search, refresh for a new set, or start a fresh session.</p>
           </div>
         )}
       </main>

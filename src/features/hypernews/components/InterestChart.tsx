@@ -17,12 +17,20 @@ const CATEGORY_COLORS: Record<string, string> = {
 export function HyperNewsInterestChart({ userId }: { userId: string }) {
   const [data, setData] = useState<{ name: string; value: number }[]>([]);
 
+  const formatTooltipValue = (
+    value: number | string | ReadonlyArray<number | string> | undefined,
+  ): [string, string] => {
+    const rawValue = Array.isArray(value) ? value[0] : value;
+    const numericValue = typeof rawValue === "number" ? rawValue : Number(rawValue ?? 0);
+    return [`${numericValue.toFixed(2)} pts`, "Interest Score"];
+  };
+
   useEffect(() => {
     if (!userId) {
       return;
     }
 
-    apiGet<Profile>(`/me/profile?user_id=${encodeURIComponent(userId)}`)
+    apiGet<Profile>(`/profile/${encodeURIComponent(userId)}`)
       .then((profile) => {
         const interests = profile.interests as Record<string, number>;
         const entries = Object.entries(interests)
@@ -59,7 +67,7 @@ export function HyperNewsInterestChart({ userId }: { userId: string }) {
               fontSize: 12,
             }}
             labelStyle={{ color: "#f1f5f9" }}
-            formatter={(value) => [`${Number(value ?? 0).toFixed(2)} pts`, "Interest Score"]}
+            formatter={formatTooltipValue}
           />
           <Bar dataKey="value" radius={[0, 6, 6, 0]}>
             {data.map((entry) => (
