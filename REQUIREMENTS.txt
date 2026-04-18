@@ -1,0 +1,21 @@
+PROJECT: Cinematic Hero Section Design
+
+PREREQUISITES
+- Node.js 18+ (recommended Node.js 20 LTS)
+- npm 9+
+- Git
+
+SETUP AND RUN
+1) git clone https://github.com/AyushChauhaniitmd/newsreccomender_system.git
+2) cd newsreccomender_system
+3) npm install
+4) npm run dev
+5) Open http://localhost:5173 (or the URL shown in terminal)
+
+PRODUCTION
+- npm run build
+- npm run preview
+
+IF POWERSHELL BLOCKS NPM
+- Use: npm.cmd install
+- Use: npm.cmd run dev
