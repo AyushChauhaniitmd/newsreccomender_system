@@ -22,15 +22,15 @@ export function Navbar() {
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 dark:bg-black/80 backdrop-blur-xl border-b border-gray-200 dark:border-white/10">
-      <div className="max-w-7xl mx-auto px-6 py-4">
-        <div className="flex items-center justify-between">
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-transparent border-b border-transparent">
+      <div className="w-full px-4 sm:px-6 lg:px-10 py-4">
+        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4">
           <Link to="/" className="text-2xl font-bold text-black dark:text-white">
             NewsHub
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-8">
+          <div className="hidden md:flex items-center justify-center gap-8">
             {links.map((link) => (
               <Link
                 key={link.path}
@@ -54,7 +54,7 @@ export function Navbar() {
           </div>
 
           {/* Theme Toggle & Mobile Menu */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center justify-end gap-4">
             <button
               onClick={toggleTheme}
               className="p-2 rounded-full bg-gray-100 dark:bg-white/10 hover:bg-gray-200 dark:hover:bg-white/20 transition-colors"
