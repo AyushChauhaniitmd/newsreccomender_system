@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { Link } from "react-router";
 
 interface Mood {
@@ -73,107 +73,120 @@ export function HyperNewsContextBar({
   exploreFocus,
   setExploreFocus,
 }: Props) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
-    <header className="hn-header">
-      <div className="hn-header-row">
-        <div className="hn-brand">
-          <span className="hn-brand-icon">HN</span>
-          <span className="hn-brand-text">HyperNews</span>
+    <>
+      {/* Fixed Toggle Button */}
+      <button
+        className="hn-sidebar-toggle"
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        aria-label="Toggle sidebar"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+
+      {/* Overlay */}
+      {sidebarOpen && (
+        <div className="hn-sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`hn-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="hn-sidebar-header">
+          <h2 className="hn-sidebar-title">HyperNews Controls</h2>
+          <button className="hn-sidebar-close" onClick={() => setSidebarOpen(false)}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
 
-        <div className="hn-toolbar">
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              onSearch();
-            }}
-            className="hn-search-form"
-          >
-            <input
-              list="hypernews-search-suggestions"
-              name="newsSearch"
-              type="text"
-              placeholder="Search with AI, memory, and reranking..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="hn-search-input"
-            />
-            <datalist id="hypernews-search-suggestions">
-              {suggestions.map((suggestion) => (
-                <option key={suggestion} value={suggestion} />
-              ))}
-            </datalist>
-
-            <button type="submit" disabled={loading} className="hn-search-btn">
-              {loading ? "Searching..." : "Search"}
-            </button>
-          </form>
-
-          <div className="hn-user-chip">
-            <span>{isAuthenticated ? "Signed in as" : "Browsing as"}</span>
-            <strong>{userLabel}</strong>
+        <div className="hn-sidebar-content">
+          {/* User Info */}
+          <div className="hn-sidebar-section">
+            <div className="hn-user-info">
+              <span className="hn-user-status">
+                {isAuthenticated ? "Signed in as : " : "Browsing as : "}
+                <strong className="hn-user-name" style={{ display: "inline" }}>{userLabel}</strong>
+              </span>
+              <span className="hn-time-label" style={{ color: "#ffffff", fontSize: "16px", fontWeight: "600" }}>{getTimeLabel()}</span>
+              {mode && (
+                <span
+                  className="hn-mode-pill"
+                  style={{
+                    background: `${MODE_COLORS[mode] || "#475569"}22`,
+                    color: MODE_COLORS[mode] || "#94a3b8",
+                    border: `1px solid ${MODE_COLORS[mode] || "#475569"}44`,
+                  }}
+                >
+                  {mode.toUpperCase()}
+                </span>
+              )}
+            </div>
           </div>
 
-          <span className="hn-time-label">{getTimeLabel()}</span>
+          {/* Mood Selection */}
+          <div className="hn-sidebar-section">
+            <label className="hn-sidebar-label">Mood</label>
+            <div className="hn-moods-sidebar">
+              {moods.map((moodOption) => (
+                <button
+                  key={moodOption.key}
+                  className={`hn-mood-pill${mood === moodOption.key ? " active" : ""}`}
+                  onClick={() => setMood(moodOption.key)}
+                >
+                  {moodOption.emoji} {moodOption.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          {mode && (
-            <span
-              className="hn-mode-pill"
-              style={{
-                background: `${MODE_COLORS[mode] || "#475569"}22`,
-                color: MODE_COLORS[mode] || "#94a3b8",
-                border: `1px solid ${MODE_COLORS[mode] || "#475569"}44`,
-              }}
-            >
-              {mode.toUpperCase()}
-            </span>
-          )}
+          {/* Explore Focus */}
+          <div className="hn-sidebar-section">
+            <label className="hn-sidebar-label">Explore vs Focus</label>
+            <div className="hn-range-wrap-sidebar">
+              <span>Explore</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={exploreFocus}
+                onChange={(event) => setExploreFocus(Number(event.target.value))}
+              />
+              <span>Focus</span>
+              <span className="hn-range-value">{exploreFocus}</span>
+            </div>
+          </div>
 
-          {isAuthenticated ? (
-            <>
-              <Link to="/hypernews/profile" className="hn-link-btn">Profile</Link>
-              <button onClick={onResetProfile} disabled={loading} style={secondaryButtonStyle}>Reset Profile</button>
-              <button onClick={onRefresh} disabled={loading} style={secondaryButtonStyle}>{loading ? "Loading..." : "Refresh Feed"}</button>
-              <button onClick={onSignOut} style={secondaryButtonStyle}>Sign Out</button>
-            </>
-          ) : (
-            <>
-              <button onClick={onRegister} style={secondaryButtonStyle}>Register</button>
-              <button onClick={onSignIn} style={secondaryButtonStyle}>Sign In</button>
-              <button onClick={onResetProfile} disabled={loading} style={secondaryButtonStyle}>Reset Guest Session</button>
-              <button onClick={onRefresh} disabled={loading} style={secondaryButtonStyle}>{loading ? "Loading..." : "Refresh Feed"}</button>
-            </>
-          )}
+          {/* Actions */}
+          <div className="hn-sidebar-section">
+            <label className="hn-sidebar-label">Actions</label>
+            <div className="hn-sidebar-actions">
+              {isAuthenticated ? (
+                <>
+                  <Link to="/hypernews/profile" className="hn-sidebar-btn" onClick={() => setSidebarOpen(false)}>Profile</Link>
+                  <button onClick={() => { onResetProfile(); setSidebarOpen(false); }} disabled={loading} className="hn-sidebar-btn">Reset Profile</button>
+                  <button onClick={() => { onRefresh(); setSidebarOpen(false); }} disabled={loading} className="hn-sidebar-btn">{loading ? "Loading..." : "Refresh Feed"}</button>
+                  <button onClick={() => { onSignOut(); setSidebarOpen(false); }} className="hn-sidebar-btn">Sign Out</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => { onRegister(); setSidebarOpen(false); }} className="hn-sidebar-btn">Register</button>
+                  <button onClick={() => { onSignIn(); setSidebarOpen(false); }} className="hn-sidebar-btn">Sign In</button>
+                  <button onClick={() => { onResetProfile(); setSidebarOpen(false); }} disabled={loading} className="hn-sidebar-btn">Reset Guest Session</button>
+                  <button onClick={() => { onRefresh(); setSidebarOpen(false); }} disabled={loading} className="hn-sidebar-btn">{loading ? "Loading..." : "Refresh Feed"}</button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div className="hn-header-subrow">
-        <div className="hn-moods">
-          <span className="hn-mood-label">Mood:</span>
-          {moods.map((moodOption) => (
-            <button
-              key={moodOption.key}
-              className={`hn-mood-pill${mood === moodOption.key ? " active" : ""}`}
-              onClick={() => setMood(moodOption.key)}
-            >
-              {moodOption.emoji} {moodOption.label}
-            </button>
-          ))}
-        </div>
-
-        <label className="hn-range-wrap">
-          <span>Explore</span>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={exploreFocus}
-            onChange={(event) => setExploreFocus(Number(event.target.value))}
-          />
-          <span>Focus</span>
-          <span>{exploreFocus}</span>
-        </label>
-      </div>
-    </header>
+      </aside>
+    </>
   );
 }

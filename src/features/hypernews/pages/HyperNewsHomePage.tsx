@@ -404,17 +404,6 @@ export function HyperNewsHomePage() {
       />
 
       <main className="hn-main-wrap">
-        {!isAuthenticated && (
-          <div className="hn-glass-card" style={{ marginTop: 24, padding: "18px 20px" }}>
-            <div>
-              <div className="hn-muted-caption">Guest Mode</div>
-              <div className="hn-guest-title">The feed is live right away, even before sign-in.</div>
-              <div className="hn-guest-subtitle">
-                Register or sign in whenever you want to save your profile, search history, and long-term feedback.
-              </div>
-            </div>
-          </div>
-        )}
 
         {explanation && <HyperNewsExplanationBanner text={explanation} mode={mode} />}
         <HyperNewsKnowledgeGraphPanel />
@@ -466,7 +455,6 @@ export function HyperNewsHomePage() {
 
         {showEmptyState && (
           <div className="hn-center-state">
-            <div className="hn-state-icon">Search</div>
             <h2>No stories matched this batch</h2>
             <p>Try a different search, refresh for a fresh set, or reset your profile memory.</p>
           </div>

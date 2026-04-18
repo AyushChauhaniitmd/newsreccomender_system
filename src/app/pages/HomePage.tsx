@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { NewsSection } from '../components/NewsSection';
 
 export function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -86,9 +85,6 @@ export function HomePage() {
           </button>
         </div>
       </div>
-
-      {/* News Section */}
-      <NewsSection />
     </div>
   );
 }
